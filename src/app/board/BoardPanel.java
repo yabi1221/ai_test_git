@@ -7,10 +7,6 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JLabel;
@@ -23,19 +19,10 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.event.ListSelectionEvent;
-import javax.swing.table.DefaultTableModel;
 
 public class BoardPanel extends JPanel {
-    private final List<BoardPost> posts = new ArrayList<>();
-    private final DefaultTableModel tableModel = new DefaultTableModel(
-        new Object[]{"ID", "Title", "Author", "Updated"}, 0
-    ) {
-        @Override
-        public boolean isCellEditable(int row, int column) {
-            return false;
-        }
-    };
-
+    private final BoardService boardService = new BoardService(new BoardRepository());
+    private final BoardTableModel tableModel = new BoardTableModel();
     private final JTable postTable = new JTable(tableModel);
     private final JTextField titleField = new JTextField();
     private final JTextField authorField = new JTextField();
@@ -48,7 +35,6 @@ public class BoardPanel extends JPanel {
     private final CardLayout editorCardLayout = new CardLayout();
     private final JPanel editorCardPanel = new JPanel(editorCardLayout);
 
-    private int nextId = 1;
     private BoardPost editingPost;
 
     public BoardPanel() {
@@ -84,9 +70,8 @@ public class BoardPanel extends JPanel {
 
         add(splitPane, BorderLayout.CENTER);
 
-        seedPosts();
         refreshTable();
-        if (!posts.isEmpty()) {
+        if (!tableModel.isEmpty()) {
             postTable.setRowSelectionInterval(0, 0);
         }
     }
@@ -186,23 +171,8 @@ public class BoardPanel extends JPanel {
         return panel;
     }
 
-    private void seedPosts() {
-        posts.add(new BoardPost(nextId++, "Welcome", "Admin", "This is a simple CRUD board example.", LocalDateTime.now().minusDays(1)));
-        posts.add(new BoardPost(nextId++, "Minesweeper Tips", "Operator", "Left click opens a cell. Right click toggles a flag.", LocalDateTime.now().minusHours(6)));
-        posts.sort(Comparator.comparingInt(BoardPost::getId).reversed());
-    }
-
     private void refreshTable() {
-        tableModel.setRowCount(0);
-        posts.sort(Comparator.comparingInt(BoardPost::getId).reversed());
-        for (BoardPost post : posts) {
-            tableModel.addRow(new Object[]{
-                post.getId(),
-                post.getTitle(),
-                post.getAuthor(),
-                post.getFormattedDate()
-            });
-        }
+        tableModel.setPosts(boardService.getPosts());
     }
 
     private void handleSelectionChange(ListSelectionEvent event) {
@@ -219,18 +189,7 @@ public class BoardPanel extends JPanel {
     }
 
     private BoardPost getSelectedPost() {
-        int selectedRow = postTable.getSelectedRow();
-        if (selectedRow < 0) {
-            return null;
-        }
-
-        int postId = (Integer) tableModel.getValueAt(selectedRow, 0);
-        for (BoardPost post : posts) {
-            if (post.getId() == postId) {
-                return post;
-            }
-        }
-        return null;
+        return tableModel.getPostAt(postTable.getSelectedRow());
     }
 
     private void showSelectedPost() {
@@ -300,12 +259,9 @@ public class BoardPanel extends JPanel {
         }
 
         if (editingPost == null) {
-            posts.add(new BoardPost(nextId++, title, author, content, LocalDateTime.now()));
+            boardService.createPost(title, author, content);
         } else {
-            editingPost.setTitle(title);
-            editingPost.setAuthor(author);
-            editingPost.setContent(content);
-            editingPost.setUpdatedAt(LocalDateTime.now());
+            boardService.updatePost(editingPost, title, author, content);
         }
 
         refreshTable();
@@ -315,7 +271,7 @@ public class BoardPanel extends JPanel {
     }
 
     private void selectLatestPost() {
-        if (tableModel.getRowCount() == 0) {
+        if (tableModel.isEmpty()) {
             clearDetail();
             return;
         }
@@ -344,11 +300,11 @@ public class BoardPanel extends JPanel {
             return;
         }
 
-        posts.remove(post);
+        boardService.deletePost(post.getId());
         refreshTable();
         editingPost = null;
 
-        if (tableModel.getRowCount() > 0) {
+        if (!tableModel.isEmpty()) {
             postTable.setRowSelectionInterval(0, 0);
         } else {
             clearDetail();
