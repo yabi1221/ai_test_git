@@ -7,8 +7,6 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
-import java.util.ArrayDeque;
-import java.util.Random;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
@@ -29,18 +27,10 @@ public class MinesweeperPanel extends JPanel {
     private final JPanel boardPanel = new JPanel();
 
     private CellButton[][] buttons;
-    private boolean[][] mines;
-    private boolean[][] revealed;
-    private boolean[][] flagged;
-    private int[][] adjacentCounts;
-
     private Difficulty difficulty = Difficulty.DEFAULTS[0];
+    private final MinesweeperGame game = new MinesweeperGame(difficulty);
     private final Timer timer;
-    private final Random random = new Random();
 
-    private boolean gameOver;
-    private boolean firstClick;
-    private int revealedSafeCells;
     private int elapsedSeconds;
 
     public MinesweeperPanel() {
@@ -97,17 +87,10 @@ public class MinesweeperPanel extends JPanel {
         timer.stop();
         elapsedSeconds = 0;
         timerLabel.setText("Time 0");
-        gameOver = false;
-        firstClick = true;
-        revealedSafeCells = 0;
+        game.reset(difficulty);
 
         for (int row = 0; row < difficulty.rows; row++) {
             for (int col = 0; col < difficulty.cols; col++) {
-                mines[row][col] = false;
-                revealed[row][col] = false;
-                flagged[row][col] = false;
-                adjacentCounts[row][col] = 0;
-
                 JButton button = buttons[row][col];
                 button.setEnabled(true);
                 button.setText("");
@@ -125,10 +108,6 @@ public class MinesweeperPanel extends JPanel {
         boardPanel.setLayout(new GridLayout(difficulty.rows, difficulty.cols, 2, 2));
 
         buttons = new CellButton[difficulty.rows][difficulty.cols];
-        mines = new boolean[difficulty.rows][difficulty.cols];
-        revealed = new boolean[difficulty.rows][difficulty.cols];
-        flagged = new boolean[difficulty.rows][difficulty.cols];
-        adjacentCounts = new int[difficulty.rows][difficulty.cols];
 
         Font cellFont = new Font("Arial", Font.BOLD, difficulty.cols > 16 ? 13 : 18);
         int cellSize = difficulty.cols > 16 ? 28 : 42;
@@ -157,66 +136,26 @@ public class MinesweeperPanel extends JPanel {
         boardPanel.repaint();
     }
 
-    private void placeMines(int safeRow, int safeCol) {
-        int placed = 0;
-        while (placed < difficulty.mines) {
-            int row = random.nextInt(difficulty.rows);
-            int col = random.nextInt(difficulty.cols);
-            if (!mines[row][col] && !isProtectedZone(row, col, safeRow, safeCol)) {
-                mines[row][col] = true;
-                placed++;
-            }
-        }
-    }
-
-    private void calculateAdjacentCounts() {
-        for (int row = 0; row < difficulty.rows; row++) {
-            for (int col = 0; col < difficulty.cols; col++) {
-                if (mines[row][col]) {
-                    continue;
-                }
-
-                int count = 0;
-                for (int r = row - 1; r <= row + 1; r++) {
-                    for (int c = col - 1; c <= col + 1; c++) {
-                        if (isInBounds(r, c) && mines[r][c]) {
-                            count++;
-                        }
-                    }
-                }
-                adjacentCounts[row][col] = count;
-            }
-        }
-    }
-
     private void revealCell(int row, int col) {
-        if (!isInBounds(row, col) || gameOver || flagged[row][col] || revealed[row][col]) {
-            return;
-        }
-
-        if (firstClick) {
-            placeMines(row, col);
-            calculateAdjacentCounts();
-            firstClick = false;
+        RevealResult result = game.revealCell(row, col);
+        if (result.startedGame()) {
             timer.start();
         }
 
-        if (mines[row][col]) {
+        if (result.mineHit()) {
             buttons[row][col].setText("*");
             buttons[row][col].setBackground(new Color(220, 80, 80));
-            revealAllMines();
-            gameOver = true;
+            revealAllMines(result.affectedCells());
             timer.stop();
             statusLabel.setText("Game Over | You hit a mine");
             JOptionPane.showMessageDialog(this, "You hit a mine.");
             return;
         }
 
-        floodReveal(row, col);
+        applyRevealedCells(result.affectedCells());
         updateStatus();
 
-        if (revealedSafeCells == difficulty.rows * difficulty.cols - difficulty.mines) {
-            gameOver = true;
+        if (result.cleared()) {
             timer.stop();
             statusLabel.setText("Clear | All safe cells opened");
             disableAllCells();
@@ -224,65 +163,39 @@ public class MinesweeperPanel extends JPanel {
         }
     }
 
-    private void floodReveal(int startRow, int startCol) {
-        ArrayDeque<int[]> queue = new ArrayDeque<>();
-        queue.add(new int[]{startRow, startCol});
-
-        while (!queue.isEmpty()) {
-            int[] current = queue.removeFirst();
-            int row = current[0];
-            int col = current[1];
-
-            if (!isInBounds(row, col) || revealed[row][col] || flagged[row][col] || mines[row][col]) {
-                continue;
-            }
-
-            revealed[row][col] = true;
-            revealedSafeCells++;
-
-            JButton button = buttons[row][col];
+    private void applyRevealedCells(java.util.List<CellPosition> revealedCells) {
+        for (CellPosition cell : revealedCells) {
+            JButton button = buttons[cell.row][cell.col];
             button.setBackground(new Color(235, 235, 235));
             button.setBorder(BorderFactory.createLoweredBevelBorder());
 
-            int count = adjacentCounts[row][col];
+            int count = game.getAdjacentCount(cell.row, cell.col);
             if (count > 0) {
                 button.setText(String.valueOf(count));
                 button.setForeground(colorForCount(count));
-                continue;
-            }
-
-            for (int r = row - 1; r <= row + 1; r++) {
-                for (int c = col - 1; c <= col + 1; c++) {
-                    if (!(r == row && c == col)) {
-                        queue.addLast(new int[]{r, c});
-                    }
-                }
+            } else {
+                button.setText("");
             }
         }
     }
 
     private void toggleFlag(int row, int col) {
-        if (!isInBounds(row, col) || gameOver || revealed[row][col]) {
+        if (!game.toggleFlag(row, col)) {
             return;
         }
 
-        flagged[row][col] = !flagged[row][col];
-        buttons[row][col].setText(flagged[row][col] ? "F" : "");
+        buttons[row][col].setText(game.isFlagged(row, col) ? "F" : "");
         buttons[row][col].setForeground(new Color(200, 120, 0));
         updateStatus();
     }
 
-    private void revealAllMines() {
-        for (int row = 0; row < difficulty.rows; row++) {
-            for (int col = 0; col < difficulty.cols; col++) {
-                if (mines[row][col]) {
-                    JButton button = buttons[row][col];
-                    button.setText("*");
-                    button.setEnabled(false);
-                    if (!revealed[row][col]) {
-                        button.setBackground(new Color(240, 170, 170));
-                    }
-                }
+    private void revealAllMines(java.util.List<CellPosition> mineCells) {
+        for (CellPosition mineCell : mineCells) {
+            JButton button = buttons[mineCell.row][mineCell.col];
+            button.setText("*");
+            button.setEnabled(false);
+            if (!game.isRevealed(mineCell.row, mineCell.col)) {
+                button.setBackground(new Color(240, 170, 170));
             }
         }
         disableAllCells();
@@ -297,26 +210,10 @@ public class MinesweeperPanel extends JPanel {
     }
 
     private void updateStatus() {
-        int flagCount = 0;
-        for (int row = 0; row < difficulty.rows; row++) {
-            for (int col = 0; col < difficulty.cols; col++) {
-                if (flagged[row][col]) {
-                    flagCount++;
-                }
-            }
-        }
-
-        int remaining = difficulty.mines - flagCount;
-        String state = gameOver ? statusLabel.getText() : "Safe " + revealedSafeCells;
+        int flagCount = game.getFlagCount();
+        int remaining = game.getRemainingMines();
+        String state = game.isGameOver() ? statusLabel.getText() : "Safe " + game.getRevealedSafeCells();
         statusLabel.setText(state + " | Mines " + difficulty.mines + " | Flags " + flagCount + " | Left " + remaining);
-    }
-
-    private boolean isInBounds(int row, int col) {
-        return row >= 0 && row < difficulty.rows && col >= 0 && col < difficulty.cols;
-    }
-
-    private boolean isProtectedZone(int row, int col, int safeRow, int safeCol) {
-        return Math.abs(row - safeRow) <= 1 && Math.abs(col - safeCol) <= 1;
     }
 
     private Color colorForCount(int count) {
